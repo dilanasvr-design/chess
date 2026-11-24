@@ -1,0 +1,83 @@
+# .github/workflows/build.yml
+name: Build IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+
+      - name: Install dependencies
+        run: |
+          brew install make
+          git clone https://github.com/official-stockfish/Stockfish.git /tmp/sf
+          cd /tmp/sf/src
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          make build ARCH=arm64 COMP=clang \
+            CXX="xcrun --sdk iphoneos clang++" \
+            CXXFLAGS="-target arm64-apple-ios16.0 -isysroot $SDK -O3"
+          chmod +x /tmp/sf/src/stockfish
+          cp /tmp/sf/src/stockfish ChessOverlay/Engine/stockfish
+
+      - name: Create Xcode project
+        run: |
+          cat > project.yml << 'EOF'
+          name: ChessOverlay
+          options:
+            bundleIdPrefix: com.chessoverlay
+            deploymentTarget:
+              iOS: "16.0"
+          targets:
+            ChessOverlay:
+              type: application
+              platform: iOS
+              sources:
+                - ChessOverlay
+              info:
+                path: ChessOverlay/Info.plist
+              settings:
+                PRODUCT_BUNDLE_IDENTIFIER: com.chessoverlay.app
+                SWIFT_VERSION: "5.9"
+                CODE_SIGNING_REQUIRED: "NO"
+                CODE_SIGNING_ALLOWED: "NO"
+                AD_HOC_CODE_SIGNING_ALLOWED: "YES"
+          EOF
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build archive
+        run: |
+          xcodebuild \
+            -project ChessOverlay.xcodeproj \
+            -scheme ChessOverlay \
+            -configuration Release \
+            -destination generic/platform=iOS \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            archive \
+            -archivePath build/ChessOverlay.xcarchive
+
+      - name: Export IPA
+        run: |
+          mkdir -p build/ipa
+          cd build/ChessOverlay.xcarchive/Products/Applications
+          mkdir Payload
+          cp -r ChessOverlay.app Payload/
+          zip -r ../../../ipa/ChessOverlay.ipa Payload/
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChessOverlay-IPA
+          path: build/ipa/ChessOverlay.ipa
+          retention-days: 7
